@@ -85,7 +85,6 @@ inline std::unique_ptr<MapRenderer> MapRenderer_new(
     mbgl::Log::setObserver(std::move(logObserver));
 
     auto map = std::make_unique<mbgl::Map>(*frontend, MapObserver::nullObserver(), mapOptions, resourceOptions);
-
     return std::make_unique<MapRenderer>(std::move(frontend), std::move(map));
 }
 

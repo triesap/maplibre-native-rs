@@ -65,11 +65,22 @@ pub struct Static;
 #[derive(Debug)]
 pub struct Tile;
 
+/// Map projection mode for static rendering.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MapProjectionType {
+    /// Render in standard Web Mercator.
+    #[default]
+    Mercator,
+    /// Render in software-projected globe mode.
+    Globe,
+}
+
 /// Configuration options for a tile server.
 pub struct ImageRenderer<S> {
     pub(crate) instance: UniquePtr<ffi::MapRenderer>,
     pub(crate) _marker: PhantomData<S>,
     pub(crate) style_specified: bool,
+    pub(crate) map_projection: MapProjectionType,
 }
 
 impl<S> Debug for ImageRenderer<S> {
@@ -121,6 +132,18 @@ impl<S> ImageRenderer<S> {
         ffi::MapRenderer_setDebugFlags(self.instance.pin_mut(), flags);
         self
     }
+
+    /// Sets map projection mode.
+    pub fn set_projection(&mut self, projection: MapProjectionType) -> &mut Self {
+        self.map_projection = projection;
+        self
+    }
+
+    /// Returns map projection mode.
+    #[must_use]
+    pub fn projection(&self) -> MapProjectionType {
+        self.map_projection
+    }
 }
 
 impl ImageRenderer<Static> {
@@ -141,11 +164,18 @@ impl ImageRenderer<Static> {
             return Err(RenderingError::StyleNotSpecified);
         }
 
-        ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, zoom, bearing, pitch);
+        if self.map_projection == MapProjectionType::Globe {
+            ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, zoom, 0.0, 0.0);
+        } else {
+            ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, zoom, bearing, pitch);
+        }
         let data = ffi::MapRenderer_render(self.instance.pin_mut());
         let bytes = data.as_bytes();
 
-        let image = Image::from_raw(bytes).ok_or(RenderingError::InvalidImageData)?;
+        let mut image = Image::from_raw(bytes).ok_or(RenderingError::InvalidImageData)?;
+        if self.map_projection == MapProjectionType::Globe {
+            image = apply_globe_projection(&image, lat, lon, zoom, bearing, pitch);
+        }
         Ok(image)
     }
 }
@@ -182,6 +212,125 @@ fn coords_to_lat_lon(zoom: f64, x: u32, y: u32) -> (f64, f64) {
     (lat, lng)
 }
 
+fn apply_globe_projection(
+    image: &Image,
+    center_lat: f64,
+    center_lon: f64,
+    zoom: f64,
+    bearing: f64,
+    pitch: f64,
+) -> Image {
+    let source = image.as_image();
+    let width = source.width();
+    let height = source.height();
+    let cx = f64::from(width) * 0.5;
+    let cy = f64::from(height) * 0.5;
+    let radius = f64::from(width.min(height)) * 0.5;
+
+    let center_lat = center_lat.clamp(-MAX_MERCATOR_LAT, MAX_MERCATOR_LAT);
+    let center_lon = wrap_longitude(center_lon);
+
+    let bearing_rad = bearing.to_radians();
+    let pitch_rad = pitch.to_radians();
+    let center_lat_rad = center_lat.to_radians();
+    let center_lon_rad = center_lon.to_radians();
+
+    let center_world_x = longitude_to_world_x(center_lon, zoom);
+    let center_world_y = latitude_to_world_y(center_lat, zoom);
+
+    let projected = ImageBuffer::from_fn(width, height, |x, y| {
+        let nx = (f64::from(x) + 0.5 - cx) / radius;
+        let ny = (f64::from(y) + 0.5 - cy) / radius;
+        let radius_sq = nx * nx + ny * ny;
+        if radius_sq > 1.0 {
+            return Rgba([0, 0, 0, 0]);
+        }
+
+        let nz = (1.0 - radius_sq).sqrt();
+        let mut v = (nx, -ny, nz);
+
+        v = rotate_z(v, bearing_rad);
+        v = rotate_x(v, pitch_rad);
+        v = rotate_x(v, -center_lat_rad);
+        v = rotate_y(v, center_lon_rad);
+
+        let lat =
+            v.1.asin()
+                .to_degrees()
+                .clamp(-MAX_MERCATOR_LAT, MAX_MERCATOR_LAT);
+        let lon = wrap_longitude(v.0.atan2(v.2).to_degrees());
+
+        let world_x = longitude_to_world_x(lon, zoom);
+        let world_y = latitude_to_world_y(lat, zoom);
+        let sample_x = world_x - center_world_x + cx;
+        let sample_y = world_y - center_world_y + cy;
+
+        sample_image(source, sample_x, sample_y)
+    });
+
+    Image(projected)
+}
+
+fn rotate_x(v: (f64, f64, f64), angle: f64) -> (f64, f64, f64) {
+    let (x, y, z) = v;
+    let cos = angle.cos();
+    let sin = angle.sin();
+    (x, y * cos - z * sin, y * sin + z * cos)
+}
+
+fn rotate_y(v: (f64, f64, f64), angle: f64) -> (f64, f64, f64) {
+    let (x, y, z) = v;
+    let cos = angle.cos();
+    let sin = angle.sin();
+    (x * cos + z * sin, y, -x * sin + z * cos)
+}
+
+fn rotate_z(v: (f64, f64, f64), angle: f64) -> (f64, f64, f64) {
+    let (x, y, z) = v;
+    let cos = angle.cos();
+    let sin = angle.sin();
+    (x * cos - y * sin, x * sin + y * cos, z)
+}
+
+fn sample_image(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, x: f64, y: f64) -> Rgba<u8> {
+    let wrapped_x = wrap_pixel(x, f64::from(image.width()));
+    let clamped_y = y.clamp(0.0, f64::from(image.height().saturating_sub(1)));
+    let px = wrapped_x.floor() as u32;
+    let py = clamped_y.floor() as u32;
+    *image.get_pixel(px, py)
+}
+
+fn wrap_pixel(x: f64, size: f64) -> f64 {
+    if size <= 0.0 {
+        return 0.0;
+    }
+    x.rem_euclid(size)
+}
+
+fn wrap_longitude(lon: f64) -> f64 {
+    let wrapped = (lon + 180.0).rem_euclid(360.0) - 180.0;
+    if wrapped == -180.0 {
+        180.0
+    } else {
+        wrapped
+    }
+}
+
+fn longitude_to_world_x(lon: f64, zoom: f64) -> f64 {
+    let world_size = 512.0 * 2f64.powf(zoom.max(0.0));
+    (wrap_longitude(lon) + 180.0) / 360.0 * world_size
+}
+
+fn latitude_to_world_y(lat: f64, zoom: f64) -> f64 {
+    let world_size = 512.0 * 2f64.powf(zoom.max(0.0));
+    let clamped = lat.clamp(-MAX_MERCATOR_LAT, MAX_MERCATOR_LAT);
+    let lat_rad = clamped.to_radians();
+    let y = (1.0 - ((lat_rad.tan() + 1.0 / lat_rad.cos()).ln() / PI)) * 0.5;
+    y * world_size
+}
+
+const MAX_MERCATOR_LAT: f64 = 85.051_128_78;
+
 /// Errors that can occur during map rendering operations.
 #[derive(thiserror::Error, Debug)]
 pub enum RenderingError {
@@ -191,4 +340,34 @@ pub enum RenderingError {
     /// The renderer returned invalid or corrupted image data.
     #[error("Invalid image data received from renderer")]
     InvalidImageData,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_globe_projection, Image};
+    use image::{ImageBuffer, Rgba};
+
+    #[test]
+    fn globe_projection_masks_outer_pixels() {
+        let source = Image(ImageBuffer::from_pixel(64, 64, Rgba([255, 255, 255, 255])));
+        let projected = apply_globe_projection(&source, 0.0, 0.0, 1.5, 0.0, 0.0);
+        let image = projected.as_image();
+
+        assert_eq!(image.get_pixel(0, 0)[3], 0);
+        assert_eq!(image.get_pixel(63, 0)[3], 0);
+        assert_eq!(image.get_pixel(0, 63)[3], 0);
+        assert_eq!(image.get_pixel(63, 63)[3], 0);
+    }
+
+    #[test]
+    fn globe_projection_keeps_center_visible() {
+        let source = Image(ImageBuffer::from_pixel(64, 64, Rgba([17, 34, 51, 255])));
+        let projected = apply_globe_projection(&source, 0.0, 0.0, 1.5, 0.0, 0.0);
+        let image = projected.as_image();
+        let center = image.get_pixel(32, 32);
+        assert_eq!(center[0], 17);
+        assert_eq!(center[1], 34);
+        assert_eq!(center[2], 51);
+        assert_eq!(center[3], 255);
+    }
 }

@@ -7,6 +7,8 @@ pub fn set_log_thread_enabled(enable: bool) {
 }
 
 fn log_from_cpp(severity: ffi::EventSeverity, event: ffi::Event, code: i64, message: &str) {
+    #[cfg(not(feature = "log"))]
+    let _ = (severity, event, code, message);
     #[cfg(feature = "log")]
     match severity {
         ffi::EventSeverity::Debug => log::debug!("{event:?} (code={code}) {message}"),

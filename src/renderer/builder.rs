@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 use crate::renderer::bridge::ffi;
-use crate::renderer::{ImageRenderer, MapMode, Static, Tile};
+use crate::renderer::{ImageRenderer, MapMode, MapProjectionType, Static, Tile};
 
 /// Builder for configuring [`ImageRenderer`] instances
 ///
@@ -26,6 +26,8 @@ pub struct ImageRendererBuilder {
     height: u32,
     /// Pixel ratio for high-DPI displays
     pixel_ratio: f32,
+    /// Map projection mode
+    map_projection: MapProjectionType,
 
     /// Cache database file path
     cache_path: Option<PathBuf>,
@@ -64,6 +66,7 @@ impl Default for ImageRendererBuilder {
             width: 512,
             height: 512,
             pixel_ratio: 1.0,
+            map_projection: MapProjectionType::Mercator,
 
             cache_path: None,
             asset_root: std::env::current_dir().ok(),
@@ -111,6 +114,16 @@ impl ImageRendererBuilder {
     #[allow(clippy::needless_pass_by_value, reason = "false positive")]
     pub fn with_pixel_ratio(mut self, pixel_ratio: impl Into<f32>) -> Self {
         self.pixel_ratio = pixel_ratio.into();
+        self
+    }
+
+    /// Sets map projection mode.
+    ///
+    /// Default: `MapProjectionType::Mercator`
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value, reason = "false positive")]
+    pub fn with_projection(mut self, map_projection: MapProjectionType) -> Self {
+        self.map_projection = map_projection;
         self
     }
 
@@ -277,6 +290,7 @@ impl<S> ImageRenderer<S> {
         Self {
             instance: map,
             style_specified: false,
+            map_projection: opts.map_projection,
             _marker: PhantomData,
         }
     }

@@ -609,12 +609,17 @@ fn build_bridge(lib_name: &str, include_dirs: &[PathBuf]) {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").expect("CARGO_CFG_TARGET_ENV not set");
 
     let mut bridge = cxx_build::bridge("src/renderer/bridge.rs");
-    bridge
-        .includes(include_dirs)
-        .file("src/renderer/bridge.cpp")
-        .flag_if_supported("-std=c++20");
+    bridge.includes(include_dirs).file("src/renderer/bridge.cpp");
+
+    if target_env == "msvc" {
+        bridge.flag_if_supported("/std:c++20");
+        bridge.flag_if_supported("/Zc:__cplusplus");
+    } else {
+        bridge.flag_if_supported("-std=c++20");
+    }
     if target_os == "macos" && target_arch == "aarch64" {
         println!("cargo:rerun-if-changed=src/renderer/icu61_compat.cpp");
         bridge.file("src/renderer/icu61_compat.cpp");

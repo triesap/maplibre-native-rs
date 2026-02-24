@@ -2,12 +2,15 @@ use std::f64::consts::PI;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::pin::Pin;
 
-use cxx::UniquePtr;
+use cxx::{CxxString, UniquePtr};
 use image::{ImageBuffer, Rgba};
 
 use crate::renderer::bridge::ffi;
 use crate::renderer::MapDebugOptions;
+#[cfg(target_vendor = "apple")]
+use objc2::rc::autoreleasepool;
 
 /// A rendered map image.
 ///
@@ -164,12 +167,15 @@ impl ImageRenderer<Static> {
             return Err(RenderingError::StyleNotSpecified);
         }
 
-        if self.map_projection == MapProjectionType::Globe {
-            ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, zoom, 0.0, 0.0);
-        } else {
-            ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, zoom, bearing, pitch);
-        }
-        let data = ffi::MapRenderer_render(self.instance.pin_mut());
+        let data = render_with_camera(
+            self.instance.pin_mut(),
+            self.map_projection,
+            lat,
+            lon,
+            zoom,
+            bearing,
+            pitch,
+        );
         let bytes = data.as_bytes();
 
         let mut image = Image::from_raw(bytes).ok_or(RenderingError::InvalidImageData)?;
@@ -192,12 +198,74 @@ impl ImageRenderer<Tile> {
         }
 
         let (lat, lon) = coords_to_lat_lon(f64::from(zoom), x, y);
-        ffi::MapRenderer_setCamera(self.instance.pin_mut(), lat, lon, f64::from(zoom), 0.0, 0.0);
-
-        let data = ffi::MapRenderer_render(self.instance.pin_mut());
+        let data = render_with_camera(
+            self.instance.pin_mut(),
+            MapProjectionType::Mercator,
+            lat,
+            lon,
+            f64::from(zoom),
+            0.0,
+            0.0,
+        );
         let bytes = data.as_bytes();
         let image = Image::from_raw(bytes).ok_or(RenderingError::InvalidImageData)?;
         Ok(image)
+    }
+}
+
+fn render_with_camera(
+    mut instance: Pin<&mut ffi::MapRenderer>,
+    projection: MapProjectionType,
+    lat: f64,
+    lon: f64,
+    zoom: f64,
+    bearing: f64,
+    pitch: f64,
+) -> UniquePtr<CxxString> {
+    #[cfg(target_vendor = "apple")]
+    {
+        return autoreleasepool(|_| {
+            apply_camera(
+                instance.as_mut(),
+                projection,
+                lat,
+                lon,
+                zoom,
+                bearing,
+                pitch,
+            );
+            ffi::MapRenderer_render(instance.as_mut())
+        });
+    }
+
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        apply_camera(
+            instance.as_mut(),
+            projection,
+            lat,
+            lon,
+            zoom,
+            bearing,
+            pitch,
+        );
+        ffi::MapRenderer_render(instance.as_mut())
+    }
+}
+
+fn apply_camera(
+    instance: Pin<&mut ffi::MapRenderer>,
+    projection: MapProjectionType,
+    lat: f64,
+    lon: f64,
+    zoom: f64,
+    bearing: f64,
+    pitch: f64,
+) {
+    if projection == MapProjectionType::Globe {
+        ffi::MapRenderer_setCamera(instance, lat, lon, zoom, 0.0, 0.0);
+    } else {
+        ffi::MapRenderer_setCamera(instance, lat, lon, zoom, bearing, pitch);
     }
 }
 

@@ -31,6 +31,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"], optional = true }
 url.workspace = true
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6"
+
 [build-dependencies]
 cmake.workspace = true
 cxx-build.workspace = true

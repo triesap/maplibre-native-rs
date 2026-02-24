@@ -76,6 +76,19 @@ impl std::fmt::Display for GraphicsRenderingAPI {
     }
 }
 
+fn resolve_core_target(target_os: &str, target_arch: &str) -> Option<&'static str> {
+    match (target_os, target_arch) {
+        ("linux", "aarch64") => Some("amalgam-linux-arm64"),
+        ("linux", "x86_64") => Some("amalgam-linux-x64"),
+        ("macos", "aarch64") => Some("amalgam-macos-arm64"),
+        _ => None,
+    }
+}
+
+fn core_library_filename(target: &str, graphics_api: GraphicsRenderingAPI) -> String {
+    format!("libmaplibre-native-core-{target}-{graphics_api}.a")
+}
+
 fn emit_build_verbose_warning(message: impl AsRef<str>) {
     println!("cargo:rerun-if-env-changed=MLN_BUILD_VERBOSE");
     if env::var("MLN_BUILD_VERBOSE").is_ok() {
@@ -262,19 +275,12 @@ fn download_static(out_dir: &Path, revision: &str) -> (PathBuf, PathBuf) {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
-    let target = match (target_os.as_str(), target_arch.as_str()) {
-        ("linux", "aarch64") => "amalgam-linux-arm64",
-        ("linux", "x86_64") => "amalgam-linux-x64",
-        ("macos", "aarch64") => "amalgam-macos-arm64",
-        _ => {
-            panic!(
-                "unsupported target: only linux and macos are currently supported by maplibre-native"
-            );
-        }
-    };
+    let target = resolve_core_target(target_os.as_str(), target_arch.as_str()).unwrap_or_else(|| {
+        panic!("unsupported target: only linux and macos are currently supported by maplibre-native")
+    });
 
     let mut tasks = Vec::new();
-    let lib_filename = format!("libmaplibre-native-core-{target}-{graphics_api}.a");
+    let lib_filename = core_library_filename(target, graphics_api);
     let library_file = out_dir.join(&lib_filename);
     if !library_file.is_file() {
         let static_url = format!(

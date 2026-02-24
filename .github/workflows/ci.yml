@@ -47,6 +47,11 @@ jobs:
           # Linux ARM
           - runs-on: ubuntu-24.04-arm
             backend: vulkan
+          # Windows x86
+          - runs-on: windows-latest
+            backend: vulkan
+          - runs-on: windows-latest
+            backend: opengl
           # macOS ARM
           - runs-on: macos-latest
             backend: metal

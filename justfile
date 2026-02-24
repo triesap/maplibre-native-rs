@@ -105,6 +105,11 @@ install-dependencies backend='vulkan':
         libuv \
         zlib
 
+# Install windows dependencies
+[windows]
+install-dependencies backend='vulkan':
+    @echo "windows dependencies are provided by the github-hosted runner image"
+
 # Show current maplibre-native dependency information
 maplibre-native-info: (assert-cmd "curl") (assert-cmd "jq")
     #!/usr/bin/env bash

@@ -690,8 +690,12 @@ fn build_mln() {
     match GraphicsRenderingAPI::from_selected_features() {
         GraphicsRenderingAPI::Vulkan => {}
         GraphicsRenderingAPI::OpenGL => {
-            println!("cargo:rustc-link-lib=GL");
-            println!("cargo:rustc-link-lib=EGL");
+            if target_os == "windows" {
+                println!("cargo:rustc-link-lib=opengl32");
+            } else {
+                println!("cargo:rustc-link-lib=GL");
+                println!("cargo:rustc-link-lib=EGL");
+            }
         }
         GraphicsRenderingAPI::Metal => {
             // macOS Metal framework dependencies

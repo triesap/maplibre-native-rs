@@ -34,6 +34,12 @@ ci-test backend: env-info (build backend) (test backend) (test-doc backend) && a
 # Run minimal subset of tests to ensure compatibility with MSRV
 ci-test-msrv backend: (ci-test backend)  # for now, same as ci-test
 
+# Run Windows CI subset on the core crate only.
+[windows]
+ci-test-windows backend: env-info
+    cargo build -p maplibre_native --features {{backend}}
+    cargo test -p maplibre_native --features {{backend}} --lib
+
 # Clean all build artifacts
 clean:
     cargo clean

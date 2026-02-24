@@ -36,7 +36,7 @@ jobs:
         with: { tool: 'just' }
       - run: just env-info install-dependencies 'vulkan'
       - run: rustup update stable && rustup default stable
-      - run: just ci-test vulkan
+      - run: just ci-test-windows vulkan
 
   test-windows-opengl:
     name: Test windows-latest - opengl
@@ -53,7 +53,7 @@ jobs:
         with: { tool: 'just' }
       - run: just env-info install-dependencies 'opengl'
       - run: rustup update stable && rustup default stable
-      - run: just ci-test opengl
+      - run: just ci-test-windows opengl
 
   windows-passed:
     needs: [ test-windows-vulkan, test-windows-opengl ]

@@ -1,0 +1,67 @@
+name: CI Windows Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: backend to test
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - vulkan
+          - opengl
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  EGL_PLATFORM: surfaceless
+
+jobs:
+  test-windows-vulkan:
+    name: Test windows-latest - vulkan
+    if: ${{ inputs.backend == 'all' || inputs.backend == 'vulkan' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with: { persist-credentials: false }
+      - if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - uses: taiki-e/install-action@288875dd3d64326724fa6d9593062d9f8ba0b131 # v2.67.30
+        with: { tool: 'just' }
+      - run: just env-info install-dependencies 'vulkan'
+      - run: rustup update stable && rustup default stable
+      - run: just ci-test vulkan
+
+  test-windows-opengl:
+    name: Test windows-latest - opengl
+    if: ${{ inputs.backend == 'all' || inputs.backend == 'opengl' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with: { persist-credentials: false }
+      - if: github.event_name != 'release' && github.event_name != 'workflow_dispatch'
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - uses: taiki-e/install-action@288875dd3d64326724fa6d9593062d9f8ba0b131 # v2.67.30
+        with: { tool: 'just' }
+      - run: just env-info install-dependencies 'opengl'
+      - run: rustup update stable && rustup default stable
+      - run: just ci-test opengl
+
+  windows-passed:
+    needs: [ test-windows-vulkan, test-windows-opengl ]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Result of the needed steps
+        run: echo "${{ toJSON(needs) }}"
+      - if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1

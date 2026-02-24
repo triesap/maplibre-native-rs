@@ -76,23 +76,62 @@ impl std::fmt::Display for GraphicsRenderingAPI {
     }
 }
 
-fn resolve_core_target(target_os: &str, target_arch: &str) -> Option<&'static str> {
+#[derive(Clone, Copy)]
+enum CoreLibraryFormat {
+    ArchiveA,
+    LibraryLib,
+}
+
+#[derive(Clone, Copy)]
+struct CoreTarget {
+    id: &'static str,
+    format: CoreLibraryFormat,
+}
+
+fn resolve_core_target(target_os: &str, target_arch: &str) -> Option<CoreTarget> {
     match (target_os, target_arch) {
-        ("linux", "aarch64") => Some("amalgam-linux-arm64"),
-        ("linux", "x86_64") => Some("amalgam-linux-x64"),
-        ("macos", "aarch64") => Some("amalgam-macos-arm64"),
+        ("linux", "aarch64") => Some(CoreTarget {
+            id: "amalgam-linux-arm64",
+            format: CoreLibraryFormat::ArchiveA,
+        }),
+        ("linux", "x86_64") => Some(CoreTarget {
+            id: "amalgam-linux-x64",
+            format: CoreLibraryFormat::ArchiveA,
+        }),
+        ("macos", "aarch64") => Some(CoreTarget {
+            id: "amalgam-macos-arm64",
+            format: CoreLibraryFormat::ArchiveA,
+        }),
+        ("windows", "x86_64") => Some(CoreTarget {
+            id: "windows-x64",
+            format: CoreLibraryFormat::LibraryLib,
+        }),
         _ => None,
     }
 }
 
-fn core_library_filename(target: &str, graphics_api: GraphicsRenderingAPI) -> String {
-    format!("libmaplibre-native-core-{target}-{graphics_api}.a")
+fn core_library_filename(target: CoreTarget, graphics_api: GraphicsRenderingAPI) -> String {
+    match target.format {
+        CoreLibraryFormat::ArchiveA => {
+            format!("libmaplibre-native-core-{}-{graphics_api}.a", target.id)
+        }
+        CoreLibraryFormat::LibraryLib => {
+            format!("maplibre-native-core-{}-{graphics_api}.lib", target.id)
+        }
+    }
 }
 
-fn is_backend_supported_for_core_target(target: &str, graphics_api: GraphicsRenderingAPI) -> bool {
-    match target {
+fn is_backend_supported_for_core_target(
+    target: CoreTarget,
+    graphics_api: GraphicsRenderingAPI,
+) -> bool {
+    match target.id {
         "amalgam-macos-arm64" => graphics_api == GraphicsRenderingAPI::Metal,
         "amalgam-linux-arm64" | "amalgam-linux-x64" => {
+            graphics_api == GraphicsRenderingAPI::OpenGL
+                || graphics_api == GraphicsRenderingAPI::Vulkan
+        }
+        "windows-x64" => {
             graphics_api == GraphicsRenderingAPI::OpenGL
                 || graphics_api == GraphicsRenderingAPI::Vulkan
         }
@@ -102,19 +141,38 @@ fn is_backend_supported_for_core_target(target: &str, graphics_api: GraphicsRend
 
 fn unsupported_target_message(target_os: &str, target_arch: &str) -> String {
     format!(
-        "unsupported precompiled core target '{target_os}/{target_arch}'. supported targets for this revision are: linux/aarch64, linux/x86_64, macos/aarch64. set MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH to use a custom local core build"
+        "unsupported precompiled core target '{target_os}/{target_arch}'. supported targets for this revision are: linux/aarch64, linux/x86_64, macos/aarch64, windows/x86_64. set MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH to use a custom local core build"
     )
 }
 
-fn unsupported_backend_message(target: &str, graphics_api: GraphicsRenderingAPI) -> String {
-    let supported = match target {
+fn unsupported_backend_message(target: CoreTarget, graphics_api: GraphicsRenderingAPI) -> String {
+    let supported = match target.id {
         "amalgam-macos-arm64" => "metal",
         "amalgam-linux-arm64" | "amalgam-linux-x64" => "opengl or vulkan",
+        "windows-x64" => "opengl or vulkan",
         _ => "no known backend",
     };
     format!(
-        "unsupported backend '{graphics_api}' for precompiled core target '{target}'. supported backend(s): {supported}"
+        "unsupported backend '{graphics_api}' for precompiled core target '{}'. supported backend(s): {supported}",
+        target.id
     )
+}
+
+fn core_link_library_name(library_file: &Path) -> String {
+    let file_name = library_file
+        .file_name()
+        .expect("static library base has a file name")
+        .to_string_lossy();
+
+    if let Some(stem) = file_name.strip_suffix(".a") {
+        return stem.strip_prefix("lib").unwrap_or(stem).to_owned();
+    }
+
+    if let Some(stem) = file_name.strip_suffix(".lib") {
+        return stem.to_owned();
+    }
+
+    panic!("unsupported core library file extension: {file_name}");
 }
 
 fn emit_build_verbose_warning(message: impl AsRef<str>) {
@@ -504,18 +562,14 @@ fn build_mln() {
 
     // These `cargo:rustc-link-lib` must be done before curl and GL,
     // especially on Linux before 1.90 (1.90 introduced new linker on Linux)
-    let lib_name = cpp_root
-        .file_name()
-        .expect("static library base has a file name")
-        .to_string_lossy()
-        .to_string()
-        .replacen("lib", "", 1)
-        .replace(".a", "");
+    let lib_name = core_link_library_name(&cpp_root);
     build_bridge(&lib_name, &include_dirs);
     globalize_macos_amalgam_symbols(&cpp_root);
 
-    println!("cargo:rustc-link-lib=curl");
-    println!("cargo:rustc-link-lib=z");
+    if target_os != "windows" {
+        println!("cargo:rustc-link-lib=curl");
+        println!("cargo:rustc-link-lib=z");
+    }
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=sqlite3");
         println!("cargo:rustc-link-lib=icucore");

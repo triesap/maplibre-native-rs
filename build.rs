@@ -141,7 +141,7 @@ fn is_backend_supported_for_core_target(
 
 fn unsupported_target_message(target_os: &str, target_arch: &str) -> String {
     format!(
-        "unsupported precompiled core target '{target_os}/{target_arch}'. supported targets for this revision are: linux/aarch64, linux/x86_64, macos/aarch64, windows/x86_64. set MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH to use a custom local core build"
+        "unsupported precompiled core target '{target_os}/{target_arch}'. supported targets for this revision are: linux/aarch64, linux/x86_64, macos/aarch64, windows/x86_64. set MLN_CORE_ARTIFACT_DIR or MLN_CORE_LIBRARY_PATH with MLN_CORE_LIBRARY_HEADERS_PATH (or MLN_CORE_HEADERS_PATH) to use a local core build"
     )
 }
 
@@ -433,46 +433,83 @@ fn extract_headers(headers_from: &Path, headers_to: &Path) {
         .expect("Failed to extract headers");
 }
 
-/// Get local directory or download maplibre-native into the `OUT_DIR`
-///
-/// Returns the path to the maplibre-native directory and an optional path to an include directorys.
-fn resolve_mln_core(root: &Path) -> (PathBuf, Vec<PathBuf>) {
-    let out_dir =
-        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is not set")).join("maplibre-native");
-
-    println!("cargo:rerun-if-env-changed=MLN_CORE_LIBRARY_PATH");
-    println!("cargo:rerun-if-env-changed=MLN_CORE_LIBRARY_HEADERS_PATH");
-    let (library_file, headers) = match (
-        env::var_os("MLN_CORE_LIBRARY_PATH"),
-        env::var_os("MLN_CORE_LIBRARY_HEADERS_PATH"),
-    ) {
-        (Some(library_path), Some(headers_path)) => {
-            (PathBuf::from(library_path), PathBuf::from(headers_path))
+fn resolve_headers_env_path() -> Option<PathBuf> {
+    let headers_path = env::var_os("MLN_CORE_LIBRARY_HEADERS_PATH").map(PathBuf::from);
+    let headers_path_alias = env::var_os("MLN_CORE_HEADERS_PATH").map(PathBuf::from);
+    match (headers_path, headers_path_alias) {
+        (Some(primary), Some(alias)) => {
+            if primary != alias {
+                panic!(
+                    "MLN_CORE_LIBRARY_HEADERS_PATH and MLN_CORE_HEADERS_PATH are both set but differ; set only one value or keep both identical"
+                );
+            }
+            Some(primary)
         }
+        (Some(primary), None) => Some(primary),
+        (None, Some(alias)) => Some(alias),
+        (None, None) => None,
+    }
+}
+
+fn expected_library_candidates(
+    target_os: &str,
+    target_arch: &str,
+    graphics_api: GraphicsRenderingAPI,
+) -> Vec<String> {
+    if let Some(target) = resolve_core_target(target_os, target_arch) {
+        return vec![core_library_filename(target, graphics_api)];
+    }
+
+    match (target_os, target_arch) {
+        ("macos", "x86_64") => vec![
+            format!("libmaplibre-native-core-amalgam-macos-x64-{graphics_api}.a"),
+            format!("libmaplibre-native-core-macos-x64-{graphics_api}.a"),
+            format!("libmaplibre-native-core-amalgam-macos-x86_64-{graphics_api}.a"),
+            format!("libmaplibre-native-core-macos-x86_64-{graphics_api}.a"),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_local_core_artifacts(
+    artifact_dir: &Path,
+    target_os: &str,
+    target_arch: &str,
+    graphics_api: GraphicsRenderingAPI,
+) -> Option<(PathBuf, PathBuf)> {
+    if !artifact_dir.is_dir() {
+        panic!(
+            "MLN_CORE_ARTIFACT_DIR must point to an existing directory, got {}",
+            artifact_dir.display()
+        );
+    }
+
+    let library_file = expected_library_candidates(target_os, target_arch, graphics_api)
+        .into_iter()
+        .map(|candidate| artifact_dir.join(candidate))
+        .find(|path| path.is_file());
+    let headers_file = [
+        artifact_dir.join("maplibre-native-headers.tar.gz"),
+        artifact_dir.join("maplibre-native-core-headers.tar.gz"),
+        artifact_dir.join("headers"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file() || path.is_dir());
+
+    match (library_file, headers_file) {
+        (Some(library_file), Some(headers_file)) => Some((library_file, headers_file)),
         (Some(_), None) => panic!(
-            "MLN_CORE_LIBRARY_HEADERS_PATH is not set. To compile from a local library/headers, both MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH must be set."
+            "MLN_CORE_ARTIFACT_DIR is missing headers artifact. expected one of: maplibre-native-headers.tar.gz, maplibre-native-core-headers.tar.gz, or headers/"
         ),
         (None, Some(_)) => panic!(
-            "MLN_CORE_LIBRARY_PATH is not set. To compile from a local library/headers, both MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH must be set."
+            "MLN_CORE_ARTIFACT_DIR does not contain a supported core library for target {target_os}/{target_arch} and selected backend {graphics_api}"
         ),
-        // Default => to downloading the static library
-        (None, None) => download_static(&out_dir, MLN_REVISION),
-    };
-    assert!(
-        library_file.is_file(),
-        "The MLN library at {} must be a file",
-        library_file.display()
-    );
-    assert!(
-        headers.is_file(),
-        "The MLN headers at {} must be a zip file containing the headers",
-        headers.display()
-    );
+        (None, None) => None,
+    }
+}
 
-    let extracted_path = out_dir.join("headers");
-    extract_headers(&headers, &extracted_path);
-    // Returning the downloaded file, bypassing CMakeLists.txt check
-    let include_dirs = vec![
+fn resolve_include_dirs(root: &Path, extracted_path: &Path) -> Vec<PathBuf> {
+    vec![
         root.join("include"),
         extracted_path
             .join("vendor")
@@ -491,7 +528,76 @@ fn resolve_mln_core(root: &Path) -> (PathBuf, Vec<PathBuf>) {
             .join("variant")
             .join("include"),
         extracted_path.join("include"),
-    ];
+    ]
+}
+
+/// Get local directory or download maplibre-native into the `OUT_DIR`
+///
+/// Returns the path to the maplibre-native directory and an optional path to an include directorys.
+fn resolve_mln_core(root: &Path) -> (PathBuf, Vec<PathBuf>) {
+    let out_dir =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is not set")).join("maplibre-native");
+
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
+    let graphics_api = GraphicsRenderingAPI::from_selected_features();
+
+    println!("cargo:rerun-if-env-changed=MLN_CORE_ARTIFACT_DIR");
+    println!("cargo:rerun-if-env-changed=MLN_CORE_LIBRARY_PATH");
+    println!("cargo:rerun-if-env-changed=MLN_CORE_LIBRARY_HEADERS_PATH");
+    println!("cargo:rerun-if-env-changed=MLN_CORE_HEADERS_PATH");
+    let (library_file, headers) = match (
+        env::var_os("MLN_CORE_ARTIFACT_DIR"),
+        env::var_os("MLN_CORE_LIBRARY_PATH"),
+        resolve_headers_env_path(),
+    ) {
+        (Some(_), Some(_), Some(_)) => panic!(
+            "MLN_CORE_ARTIFACT_DIR and MLN_CORE_LIBRARY_PATH are both set. choose either local artifact directory mode or explicit library/headers mode"
+        ),
+        (Some(artifact_dir), None, None) => resolve_local_core_artifacts(
+            Path::new(&artifact_dir),
+            &target_os,
+            &target_arch,
+            graphics_api,
+        )
+        .unwrap_or_else(|| panic!("{}", unsupported_target_message(&target_os, &target_arch))),
+        (Some(_), Some(_), None) => {
+            panic!("MLN_CORE_LIBRARY_PATH is set while MLN_CORE_LIBRARY_HEADERS_PATH/MLN_CORE_HEADERS_PATH is missing")
+        }
+        (Some(_), None, Some(_)) => {
+            panic!("MLN_CORE_ARTIFACT_DIR cannot be combined with only headers path. set MLN_CORE_LIBRARY_PATH too or use artifact directory mode only")
+        }
+        (None, Some(library_path), Some(headers_path)) => {
+            (PathBuf::from(library_path), PathBuf::from(headers_path))
+        }
+        (None, Some(_), None) => panic!(
+            "MLN_CORE_LIBRARY_PATH is set while MLN_CORE_LIBRARY_HEADERS_PATH/MLN_CORE_HEADERS_PATH is missing"
+        ),
+        (None, None, Some(_)) => panic!(
+            "MLN_CORE_LIBRARY_HEADERS_PATH/MLN_CORE_HEADERS_PATH is set while MLN_CORE_LIBRARY_PATH is missing"
+        ),
+        // Default => to downloading the static library
+        (None, None, None) => download_static(&out_dir, MLN_REVISION),
+    };
+    assert!(
+        library_file.is_file(),
+        "The MLN library at {} must be a file",
+        library_file.display()
+    );
+    let extracted_path = if headers.is_dir() {
+        headers
+    } else {
+        assert!(
+            headers.is_file(),
+            "The MLN headers at {} must be either a directory or an archive containing headers",
+            headers.display()
+        );
+        let extracted_path = out_dir.join("headers");
+        extract_headers(&headers, &extracted_path);
+        extracted_path
+    };
+    // Returning the downloaded file, bypassing CMakeLists.txt check
+    let include_dirs = resolve_include_dirs(root, &extracted_path);
     (library_file, include_dirs)
 }
 

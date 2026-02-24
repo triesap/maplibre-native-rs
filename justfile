@@ -51,7 +51,7 @@ docs backend *args='--open':
 env-info:
     @echo "Running {{if ci_mode == '1' {'in CI mode'} else {'in dev mode'} }} on {{os()}} / {{arch()}}"
     echo "PWD $(pwd)"
-    {{just_executable()}} --version
+    just --version
     rustc --version
     cargo --version
     rustup --version

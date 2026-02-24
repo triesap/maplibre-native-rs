@@ -59,6 +59,7 @@ The following platform and rendering-API combinations are supported and tested i
 | Windows x86 | ❌    | 🟨     | 🟨     |
 | Windows ARM | ❌    | 🟨     | 🟨     |
 | macOS ARM   | 🟨    | 🟨[^1] | ❌     |
+| macOS x86   | 🟨[^2] | ❌    | ❌     |
 
 <sub>
 ✅ = IS supported and tested in CI
@@ -67,6 +68,7 @@ The following platform and rendering-API combinations are supported and tested i
 </sub>
 
 [^1]: Vulcan support on macos is provided via `MoltenVK`. There is a slight performance overhead for this with little upsides. Both Metal and Vulcan run through the same extensive test suite upstream. You can use Vulcan if you find a bug in the Metal implementation until we have fixed it upstream.
+[^2]: macOS x86 support requires local core artifacts. Set `MLN_CORE_ARTIFACT_DIR`, or set both `MLN_CORE_LIBRARY_PATH` and `MLN_CORE_LIBRARY_HEADERS_PATH` (or `MLN_CORE_HEADERS_PATH` alias).
 
 ### Dependencies
 
@@ -82,7 +84,7 @@ just install-dependencies vulkan
 
 Since we wrap the [Maplibre native library](https://maplibre.org/projects/native/), we need this and its headers to be included.
 
-We can get the library and headers from two places:
+We can get the library and headers from three places:
 - <details><summary>default: downloaded from the releases page</summary>
 
   The specific version of [MapLibre Native](https://maplibre.org/projects/native/) used is controlled by `package.metadata.mln.release` in `Cargo.toml`.
@@ -90,7 +92,19 @@ We can get the library and headers from two places:
   A pull request is created if an update is available.
 
   </details>
-- <details><summary>if the env vars <code>MLN_CORE_LIBRARY_PATH</code> and <code>MLN_CORE_HEADERS_PATH</code> are set: from local disk via the environment variables</summary>
+- <details><summary>if the env var <code>MLN_CORE_ARTIFACT_DIR</code> is set: from a local artifact directory</summary>
+
+  This mode expects:
+  - a core library artifact matching the selected backend and target naming convention
+  - one of:
+    - `maplibre-native-headers.tar.gz`
+    - `maplibre-native-core-headers.tar.gz`
+    - `headers/` directory
+
+  This mode is recommended for unsupported precompiled targets, such as macOS x86.
+
+  </details>
+- <details><summary>if the env vars <code>MLN_CORE_LIBRARY_PATH</code> and <code>MLN_CORE_LIBRARY_HEADERS_PATH</code> (or alias <code>MLN_CORE_HEADERS_PATH</code>) are set: from local disk via explicit file paths</summary>
 
   If you don't want to allow network access during buildscript execution, we allow you to download the release and tell us where you have downloaded the contents.
   You can also build from source by following the steps that maplibre-native does in CI to produce the artefacts.

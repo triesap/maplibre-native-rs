@@ -89,6 +89,34 @@ fn core_library_filename(target: &str, graphics_api: GraphicsRenderingAPI) -> St
     format!("libmaplibre-native-core-{target}-{graphics_api}.a")
 }
 
+fn is_backend_supported_for_core_target(target: &str, graphics_api: GraphicsRenderingAPI) -> bool {
+    match target {
+        "amalgam-macos-arm64" => graphics_api == GraphicsRenderingAPI::Metal,
+        "amalgam-linux-arm64" | "amalgam-linux-x64" => {
+            graphics_api == GraphicsRenderingAPI::OpenGL
+                || graphics_api == GraphicsRenderingAPI::Vulkan
+        }
+        _ => false,
+    }
+}
+
+fn unsupported_target_message(target_os: &str, target_arch: &str) -> String {
+    format!(
+        "unsupported precompiled core target '{target_os}/{target_arch}'. supported targets for this revision are: linux/aarch64, linux/x86_64, macos/aarch64. set MLN_CORE_LIBRARY_PATH and MLN_CORE_LIBRARY_HEADERS_PATH to use a custom local core build"
+    )
+}
+
+fn unsupported_backend_message(target: &str, graphics_api: GraphicsRenderingAPI) -> String {
+    let supported = match target {
+        "amalgam-macos-arm64" => "metal",
+        "amalgam-linux-arm64" | "amalgam-linux-x64" => "opengl or vulkan",
+        _ => "no known backend",
+    };
+    format!(
+        "unsupported backend '{graphics_api}' for precompiled core target '{target}'. supported backend(s): {supported}"
+    )
+}
+
 fn emit_build_verbose_warning(message: impl AsRef<str>) {
     println!("cargo:rerun-if-env-changed=MLN_BUILD_VERBOSE");
     if env::var("MLN_BUILD_VERBOSE").is_ok() {
@@ -275,9 +303,11 @@ fn download_static(out_dir: &Path, revision: &str) -> (PathBuf, PathBuf) {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
-    let target = resolve_core_target(target_os.as_str(), target_arch.as_str()).unwrap_or_else(|| {
-        panic!("unsupported target: only linux and macos are currently supported by maplibre-native")
-    });
+    let target = resolve_core_target(target_os.as_str(), target_arch.as_str())
+        .unwrap_or_else(|| panic!("{}", unsupported_target_message(&target_os, &target_arch)));
+    if !is_backend_supported_for_core_target(target, graphics_api) {
+        panic!("{}", unsupported_backend_message(target, graphics_api));
+    }
 
     let mut tasks = Vec::new();
     let lib_filename = core_library_filename(target, graphics_api);

@@ -617,6 +617,7 @@ fn build_bridge(lib_name: &str, include_dirs: &[PathBuf]) {
     if target_env == "msvc" {
         bridge.flag_if_supported("/std:c++20");
         bridge.flag_if_supported("/Zc:__cplusplus");
+        bridge.define("_USE_MATH_DEFINES", None);
     } else {
         bridge.flag_if_supported("-std=c++20");
     }

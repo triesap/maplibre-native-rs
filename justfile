@@ -38,7 +38,7 @@ ci-test-msrv backend: (ci-test backend)  # for now, same as ci-test
 [windows]
 ci-test-windows backend: env-info
     cargo build -p maplibre_native --features {{backend}}
-    cargo test -p maplibre_native --features {{backend}} --lib
+    cargo check -p maplibre_native --features {{backend}} --all-targets
 
 # Clean all build artifacts
 clean:

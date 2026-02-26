@@ -17,6 +17,9 @@ fn log_from_cpp(severity: ffi::EventSeverity, event: ffi::Event, code: i64, mess
             log::error!("{event:?} (severity={repr}, code={code}) {message}");
         }
     }
+
+    #[cfg(not(feature = "log"))]
+    let _ = (severity, event, code, message);
 }
 
 #[allow(clippy::borrow_as_ptr)]

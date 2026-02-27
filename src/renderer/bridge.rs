@@ -17,6 +17,9 @@ fn log_from_cpp(severity: ffi::EventSeverity, event: ffi::Event, code: i64, mess
             log::error!("{event:?} (severity={repr}, code={code}) {message}");
         }
     }
+
+    #[cfg(not(feature = "log"))]
+    let _ = (severity, event, code, message);
 }
 
 #[allow(clippy::borrow_as_ptr)]
@@ -34,6 +37,17 @@ pub mod ffi {
         Static,
         /// Once-off still image of a single tile
         Tile,
+    }
+
+    #[repr(u32)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+    /// Map projection type configuration.
+    pub enum MapProjectionType {
+        /// Render in standard Web Mercator.
+        #[default]
+        Mercator,
+        /// Render using the globe projection.
+        Globe,
     }
 
     #[repr(u32)]
@@ -107,6 +121,7 @@ pub mod ffi {
 
         type MapMode;
         type MapDebugOptions;
+        type MapProjectionType;
         pub type EventSeverity;
         pub type Event;
     }
@@ -146,6 +161,7 @@ pub mod ffi {
             bearing: f64,
             pitch: f64,
         );
+        fn MapRenderer_setMapProjection(obj: Pin<&mut MapRenderer>, projection: MapProjectionType);
         fn MapRenderer_getStyle_loadURL(obj: Pin<&mut MapRenderer>, url: &str);
     }
 

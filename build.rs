@@ -477,6 +477,7 @@ fn build_mln() {
         .replace(".a", "");
     build_bridge(&lib_name, &include_dirs);
     globalize_macos_amalgam_symbols(&cpp_root);
+    link_optional_sidecar_libs(&cpp_root);
 
     println!("cargo:rustc-link-lib=curl");
     println!("cargo:rustc-link-lib=z");
@@ -500,6 +501,33 @@ fn build_mln() {
             println!("cargo:rustc-link-lib=framework=CoreGraphics");
             println!("cargo:rustc-link-lib=framework=AppKit");
             println!("cargo:rustc-link-lib=framework=CoreLocation");
+        }
+    }
+}
+
+fn link_optional_sidecar_libs(cpp_root: &Path) {
+    let Some(parent) = cpp_root.parent() else {
+        return;
+    };
+
+    let sidecar_candidates = [
+        ("libmlt-cpp.a", parent.to_path_buf()),
+        (
+            "libmlt-cpp.a",
+            parent.join("vendor").join("maplibre-tile-spec").join("cpp"),
+        ),
+    ];
+
+    for (archive_name, search_path) in sidecar_candidates {
+        let archive_path = search_path.join(archive_name);
+        if archive_path.is_file() {
+            println!("cargo:rustc-link-search=native={}", search_path.display());
+            println!("cargo:rustc-link-lib=static=mlt-cpp");
+            emit_build_verbose_warning(format!(
+                "Linking optional sidecar archive {}",
+                archive_path.display()
+            ));
+            break;
         }
     }
 }
